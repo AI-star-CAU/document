@@ -40,7 +40,8 @@ CREATE TABLE `chat` (
 	`parent_id`	bigint	NULL	COMMENT 'NULL -> 루트 세션',
 	`member_id`	bigint	NOT NULL,
 	`last_turn_id`	bigint	NULL	DEFAULT 0,
-	`branch_point_turn_id`	bigint	NULL
+	`branch_point_turn_id`	bigint	NULL,
+	`last_activity_at`	timestamp	NOT NULL	DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE `plan` (
@@ -74,7 +75,8 @@ CREATE TABLE `usage_record` (
 	`request_count`	INT	NOT NULL,
 	`token_limit`	bigint	NOT NULL	DEFAULT 0,
 	`member_id`	bigint	NOT NULL,
-	`plan_id`	bigint	NOT NULL
+	`plan_id`	bigint	NOT NULL,
+	`compressed_turn_count`	INT	NOT NULL	DEFAULT 0
 );
 
 CREATE TABLE `subscription` (
@@ -134,10 +136,10 @@ ALTER TABLE `social` ADD CONSTRAINT `PK_SOCIAL` PRIMARY KEY (
 
 
 
-CREATE INDEX idx_chat_root_deleted  ON chat(root_chat_id, deleted_at);
-CREATE INDEX idx_chat_parent        ON chat(parent_id);
-CREATE INDEX idx_chat_branch_point  ON chat(branch_point_turn_id);
-CREATE INDEX idx_turn_chat_sequence ON turn(chat_id, turn_sequence);
-CREATE INDEX idx_message_turn       ON message(turn_id);
-
-
+CREATE INDEX idx_chat_root_deleted         ON chat(root_chat_id, deleted_at);
+CREATE INDEX idx_chat_parent               ON chat(parent_id);
+CREATE INDEX idx_chat_branch_point         ON chat(branch_point_turn_id);
+CREATE INDEX idx_chat_member_last_activity ON chat(member_id, last_activity_at DESC);
+CREATE INDEX idx_turn_chat_sequence        ON turn(chat_id, turn_sequence);
+CREATE INDEX idx_message_turn              ON message(turn_id);
+CREATE INDEX idx_usage_member_period       ON usage_record(member_id, period_end DESC);
