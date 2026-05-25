@@ -1,0 +1,162 @@
+-- ============================================================
+-- AIT ERD - Phase 4
+-- 베이스: AIT_ERD_phase3
+-- 변경 사유: FG-4 대화 기록 파일 시스템(탐색기), FG-5 맥락 관리 지원
+--
+-- 주요 변경 (Phase 3 → Phase 4):
+--   [chat]          + last_activity_at
+--                   * last_turn_id DEFAULT 0 제거 (NULL 허용 유지)
+--                   * root_chat_id NULL → NOT NULL (root 자신은 자기 chat_id를 저장)
+--   [usage_record]  + compressed_turn_count
+--   [인덱스]        + idx_chat_member_last_activity, idx_usage_member_period
+--
+-- 표기 정리 (스키마 정의는 동일):
+--   - String(20) → varchar(20)
+--   - enum 컬럼들의 허용값을 SQL enum(...) 형식으로 명시
+-- ============================================================
+
+CREATE TABLE `turn` (
+	`turn_id`	bigint	NOT NULL,
+	`summary`	text	NULL,
+	`created_at`	timestamp	NOT NULL	DEFAULT now(),
+	`turn_sequence`	INT	NOT NULL,
+	`chat_id`	bigint	NOT NULL
+);
+
+CREATE TABLE `payment_history` (
+	`payment_id`	bigint	NOT NULL,
+	`member_id`	bigint	NOT NULL,
+	`paid_at`	timestamp	NULL	DEFAULT now(),
+	`amount`	DECIMAL	NULL,
+	`payment_method`	text	NOT NULL,
+	`previous_plan`	varchar(20)	NOT NULL,
+	`plan_id`	bigint	NOT NULL
+);
+
+CREATE TABLE `message` (
+	`message_id`	bigint	NOT NULL,
+	`sender_type`	enum('USER', 'ASSISTANT')	NOT NULL,
+	`prompt_token`	INT	NULL	COMMENT 'Phase 4: 압축 후 LLM에 실제 전달된 입력 토큰 수 (= SSE contextTokens)',
+	`answer_token`	INT	NULL,
+	`created_at`	timestamp	NOT NULL	DEFAULT now(),
+	`status`	enum('STREAMING', 'COMPLETED', 'CANCELED', 'FAILED')	NOT NULL	DEFAULT 'FAILED',
+	`content`	text	NULL,
+	`turn_id`	bigint	NOT NULL
+);
+
+CREATE TABLE `chat` (
+	`chat_id`	bigint	NOT NULL,
+	`root_chat_id`	bigint	NOT NULL	COMMENT 'root chat은 자기 chat_id 저장, branch는 root의 chat_id 저장. 저장 직후 self-id로 업데이트.',
+	`title`	text	NULL,
+	`title_status`	enum('PENDING', 'GENERATED', 'USER_EDITED')	NOT NULL	DEFAULT 'PENDING',
+	`created_at`	timestamp	NOT NULL	DEFAULT now(),
+	`updated_at`	timestamp	NOT NULL	DEFAULT now(),
+	`llm_provider`	enum('OPENAI', 'GOOGLE', 'ANTHROPIC')	NOT NULL,
+	`llm_model`	enum('gpt-4o-mini', 'gemini-2.0-flash', 'claude-3.5-sonnet')	NOT NULL,
+	`deleted_at`	timestamp	NULL,
+	`parent_id`	bigint	NULL	COMMENT 'NULL -> 루트 세션',
+	`member_id`	bigint	NOT NULL,
+	`last_turn_id`	bigint	NULL,
+	`branch_point_turn_id`	bigint	NULL,
+	`last_activity_at`	timestamp	NOT NULL	DEFAULT CURRENT_TIMESTAMP	COMMENT 'Phase 4 신규: 탐색기 정렬 캐시. 메시지/분기 활동 시 ancestor chain까지 갱신'
+);
+
+CREATE TABLE `plan` (
+	`plan_id`	bigint	NOT NULL,
+	`name`	varchar(20)	NOT NULL,
+	`price`	DECIMAL	NOT NULL,
+	`max_project`	INT	NOT NULL,
+	`max_depth`	INT	NOT NULL,
+	`max_file_size`	bigint	NOT NULL,
+	`ai_limit`	bigint	NOT NULL,
+	`description`	text	NULL
+);
+
+CREATE TABLE `member` (
+	`member_id`	bigint	NOT NULL,
+	`email`	varchar(100)	NOT NULL	COMMENT '중복 x',
+	`name`	varchar(20)	NOT NULL,
+	`password`	varchar(255)	NULL	COMMENT 'hash 처리된 값',
+	`created_at`	timestamp	NOT NULL	DEFAULT now(),
+	`updated_at`	timestamp	NOT NULL	DEFAULT now(),
+	`deleted_at`	timestamp	NULL	COMMENT 'null -> 탈퇴 X, 값 존재 -> 탈퇴 O',
+	`profile_url`	text	NULL,
+	`type`	enum('ADMIN', 'USER')	NOT NULL	DEFAULT 'USER'
+);
+
+CREATE TABLE `usage_record` (
+	`usage_record_id`	bigint	NOT NULL,
+	`period_start`	timestamp	NOT NULL,
+	`period_end`	timestamp	NOT NULL,
+	`tokens_used`	bigint	NOT NULL	DEFAULT 0	COMMENT 'Phase 4: message.prompt_token + message.answer_token 누적',
+	`request_count`	INT	NOT NULL,
+	`token_limit`	bigint	NOT NULL	DEFAULT 0	COMMENT '0 -> 무제한',
+	`member_id`	bigint	NOT NULL,
+	`plan_id`	bigint	NOT NULL,
+	`compressed_turn_count`	INT	NOT NULL	DEFAULT 0	COMMENT 'Phase 4 신규: FR-5.2 압축(summary 치환 + truncation)이 적용된 누적 turn 수. 운영 관측용'
+);
+
+CREATE TABLE `subscription` (
+	`subscription_id`	bigint	NOT NULL,
+	`start_at`	timestamp	NOT NULL,
+	`end_at`	timestamp	NULL,
+	`status`	enum('ACTIVE', 'EXPIRED')	NOT NULL,
+	`auto_renew`	BOOLEAN	NOT NULL	DEFAULT 0	COMMENT '0 -> 자동 갱신 X , 1 -> 자동 갱신 O',
+	`deleted_at`	timestamp	NULL	COMMENT 'null -> 구독 중',
+	`plan_id`	bigint	NOT NULL,
+	`member_id`	bigint	NOT NULL
+);
+
+CREATE TABLE `social` (
+	`social_id`	bigint	NOT NULL,
+	`social_provider`	enum('GOOGLE', 'KAKAO', 'NAVER')	NOT NULL,
+	`social_uid`	varchar(255)	NOT NULL,
+	`created_at`	timestamp	NOT NULL	DEFAULT now(),
+	`member_id`	bigint	NOT NULL
+);
+
+ALTER TABLE `turn` ADD CONSTRAINT `PK_TURN` PRIMARY KEY (
+	`turn_id`
+);
+
+ALTER TABLE `payment_history` ADD CONSTRAINT `PK_PAYMENT_HISTORY` PRIMARY KEY (
+	`payment_id`
+);
+
+ALTER TABLE `message` ADD CONSTRAINT `PK_MESSAGE` PRIMARY KEY (
+	`message_id`
+);
+
+ALTER TABLE `chat` ADD CONSTRAINT `PK_CHAT` PRIMARY KEY (
+	`chat_id`
+);
+
+ALTER TABLE `plan` ADD CONSTRAINT `PK_PLAN` PRIMARY KEY (
+	`plan_id`
+);
+
+ALTER TABLE `member` ADD CONSTRAINT `PK_MEMBER` PRIMARY KEY (
+	`member_id`
+);
+
+ALTER TABLE `usage_record` ADD CONSTRAINT `PK_USAGE_RECORD` PRIMARY KEY (
+	`usage_record_id`
+);
+
+ALTER TABLE `subscription` ADD CONSTRAINT `PK_SUBSCRIPTION` PRIMARY KEY (
+	`subscription_id`
+);
+
+ALTER TABLE `social` ADD CONSTRAINT `PK_SOCIAL` PRIMARY KEY (
+	`social_id`
+);
+
+
+
+CREATE INDEX idx_chat_root_deleted         ON chat(root_chat_id, deleted_at);
+CREATE INDEX idx_chat_parent               ON chat(parent_id);
+CREATE INDEX idx_chat_branch_point         ON chat(branch_point_turn_id);
+CREATE INDEX idx_chat_member_last_activity ON chat(member_id, last_activity_at DESC);
+CREATE INDEX idx_turn_chat_sequence        ON turn(chat_id, turn_sequence);
+CREATE INDEX idx_message_turn              ON message(turn_id);
+CREATE INDEX idx_usage_member_period       ON usage_record(member_id, period_end DESC);
